@@ -1,4 +1,5 @@
 #include "root.h"
+#include "WhateverModulePolicy.h"
 
 #include "headers-handwritten.h"
 #include "JavaScriptCore/JSGlobalObject.h"
@@ -554,6 +555,8 @@ BuiltinModule fetchBuiltinModuleWithoutResolution(
     ErrorableResolvedSource* res)
 {
     using Kind = BuiltinModule::Kind;
+    if (!Bun::checkWhateverModule(globalObject, specifier->toWTFString(), true))
+        return { Kind::None };
     void* bunVM = globalObject->bunVM();
     auto& vm = JSC::getVM(globalObject);
     auto scope = DECLARE_THROW_SCOPE(vm);

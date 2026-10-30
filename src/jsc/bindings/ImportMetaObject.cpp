@@ -3,6 +3,7 @@
 #include "headers.h"
 
 #include "ImportMetaObject.h"
+#include "WhateverModulePolicy.h"
 #include "ZigGlobalObject.h"
 #include "ExtendedDOMClientIsoSubspaces.h"
 #include "ExtendedDOMIsoSubspaces.h"
@@ -235,6 +236,28 @@ extern "C" JSC::EncodedJSValue functionImportMeta__resolveSyncPrivate(JSC::JSGlo
     JSValue parentModule = callFrame->argument(5);
     JSValue resolveFilenameOptions = callFrame->argument(6);
 
+    if (Bun__whateverIsLocked()) {
+        auto name = moduleName.toWTFString(lexicalGlobalObject);
+        RETURN_IF_EXCEPTION(scope, {});
+        if (!Bun::checkWhateverModule(lexicalGlobalObject, name))
+            return {};
+        if (name == "@whatever-engine/api"_s)
+            return JSValue::encode(jsString(vm, name));
+        auto result = Bun__resolveSync(lexicalGlobalObject, JSValue::encode(moduleName), JSValue::encode(from), isESM, isRequireDotResolve);
+        RETURN_IF_EXCEPTION(scope, {});
+        auto value = JSValue::decode(result);
+        if (!value.isString()) {
+            JSC::throwException(lexicalGlobalObject, scope, value);
+            return {};
+        }
+        auto resolved = value.toWTFString(lexicalGlobalObject);
+        RETURN_IF_EXCEPTION(scope, {});
+        if (!Bun::checkWhateverModule(lexicalGlobalObject, resolved, true))
+            return {};
+        return result;
+    }
+
+
     // require() / require.resolve() from a disposed Bun.ModuleGraph's module throws.
     if (auto* requirer = dynamicDowncast<Bun::JSCommonJSModule>(parentModule)) {
         Bun::throwIfModuleGraphDisposed(lexicalGlobalObject, scope, requirer->moduleGraph());
@@ -403,6 +426,8 @@ JSC_DEFINE_HOST_FUNCTION(functionImportMeta__resolve,
     // 1. Set specifier to ? ToString(specifier).
     auto specifier = specifierValue.toWTFString(globalObject);
     RETURN_IF_EXCEPTION(scope, {});
+    if (!Bun::checkWhateverModule(globalObject, specifier))
+        return {};
 
     // Node.js allows a second argument for parent
     JSValue from = {};

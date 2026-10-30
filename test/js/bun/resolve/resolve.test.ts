@@ -2255,3 +2255,42 @@ test.concurrent.each(["import", "require"])(
     expect({ stdout, stderr, exitCode }).toEqual({ stdout: "later.mjs\nlater.mjs\n", stderr: "", exitCode: 0 });
   },
 );
+
+describe("Whatever native module policy", () => {
+  test("allows local modules after irreversible lockdown", async () => {
+    using directory = tempDir("whatever-local", {
+      "entry.js": 'import value from "./local.js"; export default value;',
+      "local.js": "export default 42;",
+    });
+    const source = 'const write = process.stdout.write.bind(process.stdout);' +
+      'Bun.__whateverLockdown(' + JSON.stringify(String(directory)) + ');' +
+      'const value = await import(' + JSON.stringify(pathToFileURL(join(String(directory), "entry.js")).href) + ');' +
+      'write(JSON.stringify(value.default));';
+    await using child = Bun.spawn({
+      cmd: [bunExe(), "--no-env-file", "--no-install", "-e", source],
+      env: bunEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([child.stdout.text(), child.stderr.text(), child.exited]);
+    expect({ stdout, stderr, exitCode }).toEqual({ stdout: "42", stderr: "", exitCode: 0 });
+  });
+
+  test.each(["node:fs", "fs", "bun", "bun:ffi", "some-package"])("denies importing %s", async name => {
+    using directory = tempDir("whatever-denied", {
+      "entry.js": "import " + JSON.stringify(name) + ";",
+    });
+    const source = 'Bun.__whateverLockdown(' + JSON.stringify(String(directory)) + ');' +
+      'await import(' + JSON.stringify(pathToFileURL(join(String(directory), "entry.js")).href) + ');';
+    await using child = Bun.spawn({
+      cmd: [bunExe(), "--no-env-file", "--no-install", "-e", source],
+      env: bunEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([child.stdout.text(), child.stderr.text(), child.exited]);
+    expect(stdout).toBe("");
+    expect(stderr).toMatch(new RegExp("Whatever module policy denied: " + (name === "fs" ? "(?:node:)?fs" : name)));
+    expect(exitCode).toBe(1);
+  });
+});

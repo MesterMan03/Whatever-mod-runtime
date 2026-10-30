@@ -1,5 +1,5 @@
 import { readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { crateOf, debugFlag, shJoin, typesOnlyFlag, type Ctx } from "./codegen.ts";
 import type { CodegenFields, Config } from "./config.ts";
 import { assert } from "./error.ts";
@@ -285,7 +285,8 @@ export function emitBuiltinsTable({ n, cfg, sources, o, dirStamp, engine }: Ctx)
         script,
         `--codegen-path=${cfg.codegenDir}`,
         `--target=${builtinTableTarget(cfg)}`,
-        `--sources=${sources.bindgen.map(src => `${crateOf(src)}=${src}`).join(",")}`,
+        // The generator runs in cfg.cwd; avoid repeating that root past cmd.exe's limit.
+        `--sources=${sources.bindgen.map(src => `${crateOf(src)}=${relative(cfg.cwd, src)}`).join(",")}`,
         `--engine-directory=${engine.directory}`,
         ...(engine.javaScriptCore === undefined
           ? [`--prebuilt-generated=${engine.builtinsGeneratedDirectory}`]

@@ -1,6 +1,7 @@
 #include "root.h"
 
 #include "ZigGlobalObject.h"
+#include "WhateverModulePolicy.h"
 #include "CodeGenerationFromStrings.h"
 #include "BunModuleRegistry.h"
 #include "BuiltinModuleKeys.h"
@@ -2413,6 +2414,62 @@ JSC_DEFINE_CUSTOM_GETTER(getDebugIDs, (JSGlobalObject * globalObject, EncodedJSV
     return JSValue::encode(debugIDs);
 }
 #endif
+static bool whateverGlobalAllowed(const Identifier& name)
+{
+    static constexpr ASCIILiteral allowed[] = {
+        "globalThis"_s, "global"_s, "self"_s, "undefined"_s, "NaN"_s, "Infinity"_s,
+        "Object"_s, "Function"_s, "Boolean"_s, "Symbol"_s, "Number"_s, "BigInt"_s,
+        "Math"_s, "Date"_s, "String"_s, "RegExp"_s, "Array"_s, "JSON"_s,
+        "Map"_s, "Set"_s, "WeakMap"_s, "WeakSet"_s, "WeakRef"_s, "FinalizationRegistry"_s,
+        "Promise"_s, "Reflect"_s, "Proxy"_s, "Intl"_s, "Temporal"_s, "Iterator"_s, "AsyncIterator"_s,
+        "Error"_s, "AggregateError"_s, "EvalError"_s, "RangeError"_s, "ReferenceError"_s,
+        "SyntaxError"_s, "TypeError"_s, "URIError"_s, "SuppressedError"_s,
+        "ArrayBuffer"_s, "SharedArrayBuffer"_s, "DataView"_s, "Atomics"_s,
+        "Int8Array"_s, "Uint8Array"_s, "Uint8ClampedArray"_s, "Int16Array"_s, "Uint16Array"_s,
+        "Int32Array"_s, "Uint32Array"_s, "Float16Array"_s, "Float32Array"_s, "Float64Array"_s,
+        "BigInt64Array"_s, "BigUint64Array"_s, "Buffer"_s,
+        "eval"_s, "parseInt"_s, "parseFloat"_s, "isNaN"_s, "isFinite"_s,
+        "encodeURI"_s, "decodeURI"_s, "encodeURIComponent"_s, "decodeURIComponent"_s,
+        "escape"_s, "unescape"_s, "atob"_s, "btoa"_s,
+        "TextEncoder"_s, "TextDecoder"_s, "URL"_s, "URLSearchParams"_s,
+        "setTimeout"_s, "clearTimeout"_s, "setInterval"_s, "clearInterval"_s,
+        "setImmediate"_s, "clearImmediate"_s, "queueMicrotask"_s, "structuredClone"_s,
+        "console"_s, "DisposableStack"_s, "AsyncDisposableStack"_s,
+    };
+    if (name.isSymbol())
+        return false;
+    for (auto candidate : allowed) {
+        if (name.string() == candidate)
+            return true;
+    }
+    return false;
+}
+
+JSC_DEFINE_HOST_FUNCTION(whateverLockdown, (JSGlobalObject* lexicalGlobalObject, CallFrame* callFrame))
+{
+    auto* globalObject = uncheckedDowncast<Zig::GlobalObject>(lexicalGlobalObject);
+    auto& vm = globalObject->vm();
+    auto scope = DECLARE_THROW_SCOPE(vm);
+    if (!callFrame->argument(0).isString())
+        return throwVMTypeError(globalObject, scope, "Whatever lockdown requires a mod root"_s);
+    auto root = callFrame->argument(0).toWTFString(globalObject);
+    RETURN_IF_EXCEPTION(scope, {});
+    auto rootString = Bun::toString(root);
+    if (!Bun__whateverLock(&rootString))
+        return throwVMTypeError(globalObject, scope, "Whatever lockdown requires an existing directory and cannot be changed"_s);
+
+    // Trusted bootstrap modules must not be reachable through require.cache.
+    globalObject->requireMap()->clear(globalObject);
+    RETURN_IF_EXCEPTION(scope, {});
+    PropertyNameArrayBuilder names(vm, PropertyNameMode::StringsAndSymbols, PrivateSymbolMode::Exclude);
+    globalObject->methodTable()->getOwnPropertyNames(globalObject, globalObject, names, DontEnumPropertiesMode::Include);
+    RETURN_IF_EXCEPTION(scope, {});
+    for (auto& name : names) {
+        if (!whateverGlobalAllowed(name))
+            globalObject->putDirect(vm, name, jsUndefined(), PropertyAttribute::ReadOnly | PropertyAttribute::DontDelete);
+    }
+    return JSValue::encode(jsNumber(1));
+}
 
 void GlobalObject::finishCreation(VM& vm)
 {
@@ -2881,7 +2938,9 @@ void GlobalObject::finishCreation(VM& vm)
              init.set(obj);
          } },
         { OBJECT_OFFSETOF(GlobalObject, m_bunObject), [](const LazyProperty<JSGlobalObject, JSObject>::Initializer& init) {
-             init.set(Bun::createBunObject(init.vm, init.owner));
+             auto* object = Bun::createBunObject(init.vm, init.owner);
+             object->putDirectNativeFunction(init.vm, init.owner, Identifier::fromString(init.vm, "__whateverLockdown"_s), 1, whateverLockdown, ImplementationVisibility::Public, NoIntrinsic, PropertyAttribute::DontEnum | PropertyAttribute::ReadOnly | PropertyAttribute::DontDelete);
+             init.set(object);
          } },
         { OBJECT_OFFSETOF(GlobalObject, m_JSBunRequestParamsPrototype), [](const LazyProperty<JSGlobalObject, JSObject>::Initializer& init) {
              init.set(Bun::createJSBunRequestParamsPrototype(init.vm, static_cast<Zig::GlobalObject*>(init.owner)));
@@ -3940,7 +3999,7 @@ JSC::Identifier GlobalObject::moduleLoaderResolve(JSGlobalObject* jsGlobalObject
     if (key.isString()) {
         auto moduleName = uncheckedDowncast<JSString>(key)->value(globalObject);
         RETURN_IF_EXCEPTION(scope, {});
-        if (!globalObject->onLoadPlugins.hasVirtualModules() && !Bun__hasPlugins(globalObject)) {
+        if (!Bun__whateverIsLocked() && !globalObject->onLoadPlugins.hasVirtualModules() && !Bun__hasPlugins(globalObject)) {
             Latin1CString narrowed;
             std::span<const Latin1Character> chars;
             if (moduleName->is8Bit())
@@ -3968,6 +4027,8 @@ JSC::Identifier GlobalObject::moduleLoaderResolve(JSGlobalObject* jsGlobalObject
         keyString = key.toWTFString(globalObject);
         RETURN_IF_EXCEPTION(scope, {});
     }
+    if (!Bun::checkWhateverModule(globalObject, keyString))
+        return {};
     WTF::String referrerString;
     if (referrer && referrer.isString()) {
         referrerString = referrer.toWTFString(globalObject);
@@ -3997,6 +4058,8 @@ JSC::Identifier GlobalObject::moduleLoaderResolve(JSGlobalObject* jsGlobalObject
     }
     auto resolved = res.result.value.transferToWTFString();
     auto query = queryZ.transferToWTFString();
+    if (!Bun::checkWhateverModule(globalObject, resolved, true))
+        return {};
 
     if (!query.isEmpty()) {
         return Identifier::fromString(vm, makeString(resolved, query));
@@ -4008,7 +4071,7 @@ JSC::Identifier StandaloneGlobalObject::moduleLoaderResolve(JSGlobalObject* glob
 {
     // Embedded modules import each other by their final `/$bunfs/` key; hand it straight back (unless a plugin could claim it).
     auto* zigGlobalObject = static_cast<Zig::GlobalObject*>(globalObject);
-    if (key.isString() && !zigGlobalObject->onLoadPlugins.hasVirtualModules() && !Bun__hasPlugins(zigGlobalObject)) {
+    if (!Bun__whateverIsLocked() && key.isString() && !zigGlobalObject->onLoadPlugins.hasVirtualModules() && !Bun__hasPlugins(zigGlobalObject)) {
         auto* string = uncheckedDowncast<JSString>(key);
         if (!string->isRope()) {
             auto view = string->tryGetValue();
@@ -4137,6 +4200,9 @@ JSC::JSPromise* GlobalObject::moduleLoaderFetch(JSGlobalObject* globalObject,
     // Not `auto` (GCOwnedDataScope): fetchESMSourceCode can transpile the main entry synchronously and spin the event loop for an async macro, during which IncrementalSweeper asserts no scope is live with entryScope null.
     WTF::String moduleKey = moduleKeyJS->value(globalObject);
     if (scope.exception()) [[unlikely]]
+        return rejectedInternalPromise(globalObject, scope.exception()->value());
+
+    if (!Bun::checkWhateverModule(globalObject, moduleKey, true))
         return rejectedInternalPromise(globalObject, scope.exception()->value());
 
     if (moduleKey.endsWith(".node"_s)) {
@@ -4593,7 +4659,7 @@ JSC::JSPromise* StandaloneGlobalObject::moduleLoaderFetch(JSGlobalObject* jsGlob
     auto scope = DECLARE_THROW_SCOPE(vm);
 
     bool plainJS = !parameters || parameters->type() == ScriptFetchParameters::Type::JavaScript;
-    if (!plainJS || globalObject->onLoadPlugins.hasVirtualModules() || Bun__hasPlugins(globalObject))
+    if (Bun__whateverIsLocked() || !plainJS || globalObject->onLoadPlugins.hasVirtualModules() || Bun__hasPlugins(globalObject))
         RELEASE_AND_RETURN(scope, GlobalObject::moduleLoaderFetch(jsGlobalObject, loader, key, referrer, WTF::move(parameters), WTF::move(fetcher)));
 
     JSString* keyJS = key.toString(globalObject);

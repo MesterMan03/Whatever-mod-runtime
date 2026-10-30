@@ -37,6 +37,7 @@
 #include "JavaScriptCore/JSCast.h"
 #include <JavaScriptCore/JSMapInlines.h>
 #include "root.h"
+#include "WhateverModulePolicy.h"
 #include "JavaScriptCore/SourceCode.h"
 #include "headers-handwritten.h"
 #include "Path.h"
@@ -632,6 +633,8 @@ JSC_DEFINE_CUSTOM_GETTER(getterPath, (JSC::JSGlobalObject * globalObject, JSC::E
 
 JSC_DEFINE_CUSTOM_GETTER(getterParent, (JSC::JSGlobalObject * globalObject, JSC::EncodedJSValue thisValue, JSC::PropertyName))
 {
+    if (Bun__whateverIsLocked())
+        return JSValue::encode(jsNull());
     auto& vm = JSC::getVM(globalObject);
     auto scope = DECLARE_THROW_SCOPE(vm);
 

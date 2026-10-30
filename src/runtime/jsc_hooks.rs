@@ -2229,6 +2229,13 @@ fn transpile_source_code_of_any_provenance<const DATA_ONLY: bool>(
     let (loader, module_type): (Loader, ModuleType) =
         unsafe { ((*extra).loader, (*extra).module_type) };
 
+    if bun_jsc::whatever::is_locked()
+        && !matches!(loader, L::Js | L::Jsx | L::Ts | L::Tsx | L::Json)
+    {
+        return Err(args.global_object
+            .throw_type_error(format_args!("Whatever module policy denied loader: {loader:?}"))
+            .into());
+    }
     let disable_transpilying = args.flags.disable_transpiling();
     let specifier = args.specifier;
     let referrer = args.referrer;
@@ -2602,9 +2609,10 @@ fn transpile_source_code_of_any_provenance<const DATA_ONLY: bool>(
                         (*jsc_vm).transpiler.options.rewrite_jest_for_tests
                     },
                     keep_json_and_toml_as_one_statement: true,
-                    allow_bytecode_cache: true,
+                    allow_bytecode_cache: !bun_jsc::whatever::is_locked(),
                     set_breakpoint_on_first_line,
                     runtime_transpiler_cache: if !DATA_ONLY
+                        && !bun_jsc::whatever::is_locked()
                         && !disable_transpilying
                         && !<RuntimeTranspilerCache as bun_bundler::RuntimeTranspilerCacheExt>::disabled()
                     {
@@ -2678,6 +2686,29 @@ fn transpile_source_code_of_any_provenance<const DATA_ONLY: bool>(
                     }
                     return Err(crate::Error::ParseError);
                 };
+
+                if bun_jsc::whatever::is_locked() {
+                    for record in parse_result.ast.import_records.as_slice() {
+                        if record.kind != ImportKind::Stmt
+                            || record.flags.contains(bun_ast::ImportRecordFlags::IS_INTERNAL)
+                        {
+                            continue;
+                        }
+                        let name = if record.original_path.is_empty() {
+                            record.path.text
+                        } else {
+                            record.original_path
+                        };
+                        if !bun_jsc::whatever::allows_import(name) {
+                            return Err(global_object
+                                .throw_type_error(format_args!(
+                                    "Whatever module policy denied: {}",
+                                    bstr::BStr::new(name)
+                                ))
+                                .into());
+                        }
+                    }
+                }
 
                 // `.wasm` discovered post-parse: recurse with
                 // the parsed source as virtual.
@@ -3003,6 +3034,16 @@ fn transpile_source_code_of_any_provenance<const DATA_ONLY: bool>(
                     )?;
                 }
 
+                // Bun imports normally become globalThis.Bun without reaching a
+                // module loader. Locked mods must use the checked resolution path.
+                if bun_jsc::whatever::is_locked() {
+                    for record in parse_result.ast.import_records.as_mut_slice() {
+                        if record.tag == bun_ast::ImportRecordTag::Bun {
+                            record.tag = bun_ast::ImportRecordTag::None;
+                            record.flags.remove(bun_ast::ImportRecordFlags::IS_EXTERNAL_WITHOUT_SIDE_EFFECTS);
+                        }
+                    }
+                }
                 // Pending imports → AsyncModule queue.
                 if parse_result.pending_imports.len() > 0 {
                     // SAFETY: per fn contract — `extra` is live for the call.
@@ -4519,6 +4560,7 @@ unsafe fn transpile_file<const DATA_ONLY: bool>(
             )
         };
         if !had_blob
+            && !bun_jsc::whatever::is_locked()
             && allow_promise
             && (has_loaded || is_in_preload)
             && concurrent_loader.is_java_script_like()

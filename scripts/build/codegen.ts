@@ -973,7 +973,8 @@ export function emitBindgen({ n, cfg, sources, o, dirStamp, engine }: Ctx): void
       args: shJoin(cfg, [
         script,
         // Every schema: build/types is shared by every profile, so Bindgen.d.ts describes them all.
-        `--sources=${sources.bindgen.map(src => `${crates.get(src)}=${src}`).join(",")}`,
+        // The generator runs in cfg.cwd; keep the source list below cmd.exe's limit.
+        `--sources=${sources.bindgen.map(src => `${crates.get(src)}=${relative(cfg.cwd, src)}`).join(",")}`,
         typesOnlyFlag(cfg, sources),
         `--codegen-path=${cfg.codegenDir}`,
         `--types-path=${cfg.typesDir}`,

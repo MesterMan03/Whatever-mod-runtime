@@ -261,6 +261,11 @@ export async function downloadWithRetry(
  */
 export async function extractTarGz(tarball: string, dest: string, stripComponents = 1): Promise<void> {
   const args = ["-xzmf", tarball, "-C", dest];
+  // zstd's CLI-test links target an unbuilt executable; only its library is built here.
+  // Windows bsdtar cannot create these dangling links without symlink privileges.
+  if (process.platform === "win32" && /[\\/]zstd$/.test(dest)) {
+    args.push("--exclude=*/tests/cli-tests/bin/unzstd", "--exclude=*/tests/cli-tests/bin/zstdcat");
+  }
   if (stripComponents > 0) args.push(`--strip-components=${stripComponents}`);
 
   const result = spawnSync(tarExe, args, {
