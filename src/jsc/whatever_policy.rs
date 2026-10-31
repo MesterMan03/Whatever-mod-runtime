@@ -2,13 +2,34 @@ use std::path::{Component, Path, PathBuf};
 
 pub(crate) const API_MODULE: &str = "@whatever-engine/api";
 
+// Rust's Unix canonicalize calls realpath(path, NULL), then libc::free. Bun
+// interposes free, but glibc's realpath may allocate through __libc_malloc.
+// Supply the storage ourselves so no libc-owned allocation crosses allocators.
+#[cfg(unix)]
+fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    use std::ffi::{CString, OsString};
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let source = CString::new(path.as_os_str().as_bytes())
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+    let mut resolved = bun_core::PathBuffer::ZEROED;
+    let bytes = bun_sys::realpath(bun_core::ZStr::from_cstr(&source), &mut resolved)
+        .map_err(|error| std::io::Error::from_raw_os_error(error.errno as i32))?;
+    Ok(PathBuf::from(OsString::from_vec(bytes.to_vec())))
+}
+
+#[cfg(not(unix))]
+fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    path.canonicalize()
+}
+
 pub(crate) struct ModulePolicy {
     root: PathBuf,
 }
 
 impl ModulePolicy {
     pub(crate) fn new(root: &Path) -> std::io::Result<Self> {
-        let root = root.canonicalize()?;
+        let root = canonicalize(root)?;
         if !root.is_dir() {
             return Err(std::io::Error::other("mod root must be a directory"));
         }
@@ -39,7 +60,7 @@ impl ModulePolicy {
         if !path.is_absolute() || has_node_modules(path) {
             return false;
         }
-        let Ok(resolved) = path.canonicalize() else {
+        let Ok(resolved) = canonicalize(path) else {
             return false;
         };
         resolved.starts_with(&self.root)

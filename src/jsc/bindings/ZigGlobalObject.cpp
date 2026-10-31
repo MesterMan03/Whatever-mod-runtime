@@ -1049,6 +1049,18 @@ JSC_DEFINE_HOST_FUNCTION(functionRequireCacheWillSet, (JSC::JSGlobalObject * glo
 
 JSC_DEFINE_HOST_FUNCTION(functionIsHiddenFromRequireCache, (JSC::JSGlobalObject * globalObject, JSC::CallFrame* callFrame))
 {
+    if (Bun__whateverIsLocked()) {
+        if (!callFrame->argumentCount())
+            return JSValue::encode(jsBoolean(true));
+        auto keyValue = callFrame->uncheckedArgument(0);
+        if (!keyValue.isString())
+            return JSValue::encode(jsBoolean(true));
+        auto scope = DECLARE_THROW_SCOPE(JSC::getVM(globalObject));
+        auto key = asString(keyValue)->value(globalObject);
+        RETURN_IF_EXCEPTION(scope, {});
+        auto specifier = Bun::toString(key);
+        return JSValue::encode(jsBoolean(!Bun__whateverAllowsResolved(&specifier)));
+    }
     if (!Bun::hasCompiledModules()) [[likely]]
         return JSValue::encode(jsBoolean(false));
     if (!callFrame->argumentCount())

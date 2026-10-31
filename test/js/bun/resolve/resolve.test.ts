@@ -2257,6 +2257,38 @@ test.concurrent.each(["import", "require"])(
 );
 
 describe("Whatever native module policy", () => {
+  test("hides trusted ESM entries from a cache proxy created before lockdown", async () => {
+    using directory = tempDir("whatever-cache", {
+      "trusted.mjs": "export const secret = 42;",
+      "mod/entry.cjs": `
+        const cache = require.cache;
+        if (Object.keys(cache).some(key => key.includes("trusted.mjs"))) throw Error("trusted ESM key exposed");
+        const local = require("./local.cjs");
+        if (local !== 7 || !cache[require.resolve("./local.cjs")]) throw Error("local cache unavailable");
+        module.exports = "hidden";
+      `,
+      "mod/local.cjs": "module.exports = 7;",
+    });
+    const trusted = join(String(directory), "trusted.mjs");
+    const root = join(String(directory), "mod");
+    const source = 'const write = process.stdout.write.bind(process.stdout);' +
+      'await import(' + JSON.stringify(pathToFileURL(trusted).href) + ');' +
+      'const cache = require.cache; const key = Object.keys(cache).find(key => key.includes("trusted.mjs"));' +
+      'if (!key) throw Error("trusted fixture was not cached");' +
+      'Bun.__whateverLockdown(' + JSON.stringify(root) + ');' +
+      'if (cache[key] !== undefined || key in cache || Object.getOwnPropertyDescriptor(cache,key)) throw Error("trusted cache lookup exposed");' +
+      'const value = await import(' + JSON.stringify(pathToFileURL(join(root, "entry.cjs")).href) + ');' +
+      'write(value.default);';
+    await using child = Bun.spawn({
+      cmd: [bunExe(), "--no-env-file", "--no-install", "-e", source],
+      env: bunEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([child.stdout.text(), child.stderr.text(), child.exited]);
+    expect({ stdout, stderr, exitCode }).toEqual({ stdout: "hidden", stderr: "", exitCode: 0 });
+  });
+
   test("allows local modules after irreversible lockdown", async () => {
     using directory = tempDir("whatever-local", {
       "entry.js": 'import value from "./local.js"; export default value;',

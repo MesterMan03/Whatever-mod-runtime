@@ -279,8 +279,9 @@ export function createRequireCache(requireMap: RequireMap, owner?: JSCommonJSMod
   const isBuiltinKey = (key: string | symbol) =>
     typeof key === "string" && (key.startsWith("node:") || key.startsWith("bun:"));
   // An executable that `bun build --compile --aot` made never lists its own files, which run once: the cache holds the files that were loaded from outside of the executable, as in a bundled executable.
-  const hidesFiles = $isHiddenFromRequireCache();
-  const isHidden = (key: string | symbol) => hidesFiles && $isHiddenFromRequireCache(key);
+  // Lockdown can activate after a trusted bootstrap has created this proxy.
+  // Consult the native policy on access, including the ESM registry fallback.
+  const isHidden = (key: string | symbol) => $isHiddenFromRequireCache(key);
   const hasKey = (key: string) =>
     !isHidden(key) && (requireMap.$has(key) || (!isBuiltinKey(key) && $esmRegistryHasEvaluated(key, owner)));
   var proxy = new Proxy(inner, {
@@ -325,7 +326,7 @@ export function createRequireCache(requireMap: RequireMap, owner?: JSCommonJSMod
           $arrayPush(array, key);
         }
       }
-      if (!hidesFiles) return array;
+      if (!$isHiddenFromRequireCache()) return array;
       var shown: string[] = [];
       for (var index = 0; index < array.length; index++) {
         if (!isHidden(array[index])) $arrayPush(shown, array[index]);
